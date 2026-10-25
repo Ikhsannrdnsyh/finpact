@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
-import { CircleAlert, CircleCheck, Eye, EyeOff, LoaderCircle, LogIn, UserPlus } from "lucide-react";
+import { CircleAlert, CircleCheck, Eye, EyeOff, LoaderCircle, LogIn, UserPlus, UserRound } from "lucide-react";
 import { Alert, type Feedback } from "@/components/ui/Alert";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -12,7 +12,8 @@ import { Field, TextInput, fieldA11y } from "@/components/ui/FormField";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { cn } from "@/lib/cn";
 import { createClient } from "@/lib/supabase/client";
-import { MIN_PASSWORD_LENGTH, getAuthErrorMessage } from "../messages";
+import { setGuestMode } from "../guest-mode";
+import { EMAIL_PATTERN, MIN_PASSWORD_LENGTH, getAuthErrorMessage } from "../messages";
 import { useAuth } from "../use-auth";
 
 type Mode = "login" | "register";
@@ -24,8 +25,6 @@ interface AuthValues {
 }
 
 type AuthErrors = Partial<Record<keyof AuthValues, string>>;
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validate(mode: Mode, values: AuthValues): AuthErrors {
   const errors: AuthErrors = {};
@@ -97,6 +96,11 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
     setFeedback(null);
   }
 
+  function continueAsGuest() {
+    setGuestMode(true);
+    router.replace("/");
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
@@ -121,7 +125,8 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
           setFeedback({ kind: "error", message: getAuthErrorMessage(error) });
           return;
         }
-        router.push("/");
+        setGuestMode(false);
+        router.replace("/");
         return;
       }
 
@@ -135,7 +140,8 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
         return;
       }
       if (data.session) {
-        router.push("/");
+        setGuestMode(false);
+        router.replace("/");
         return;
       }
       setFeedback({
@@ -168,7 +174,7 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
         ))}
       </div>
 
-      <form onSubmit={handleSubmit} noValidate className="space-y-4">
+      <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-4">
         <Field id={fieldId("email")} label="Email" error={errors.email}>
           <TextInput
             id={fieldId("email")}
@@ -209,6 +215,14 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
           </div>
         </Field>
 
+        {mode === "login" && (
+          <div className="-mt-2 text-right">
+            <Link href="/lupa-sandi" className="text-sm font-semibold text-primary hover:underline">
+              Lupa kata sandi?
+            </Link>
+          </div>
+        )}
+
         {mode === "register" && (
           <div className="space-y-1.5">
             <label className="flex items-start gap-3 text-sm">
@@ -221,7 +235,7 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
                 aria-describedby={errors.agreed ? `${fieldId("agreed")}-error` : undefined}
               />
               <span>
-                Saya Sudah mendapat izin untuk membuat akun dan
+                Saya berusia 18 tahun ke atas, atau sudah mendapat izin orang tua/wali untuk membuat akun dan
                 menyimpan catatan keuanganku di FinPact.
               </span>
             </label>
@@ -258,6 +272,16 @@ export function AuthForm({ callbackError }: { callbackError: boolean }) {
           {mode === "login" ? "Daftar di sini" : "Masuk di sini"}
         </button>
       </p>
+
+      <div className="mt-5 border-t border-border pt-5 text-center">
+        <Button variant="secondary" className="w-full" onClick={continueAsGuest} disabled={pending}>
+          <UserRound className="size-4" />
+          Masuk sebagai Tamu
+        </Button>
+        <p className="mt-2 text-xs text-muted">
+          Tanpa akun, data hanya tersimpan di browser ini dan tidak bisa dibuka dari perangkat lain.
+        </p>
+      </div>
     </Card>
   );
 }

@@ -39,7 +39,7 @@ function QuickActions() {
 }
 
 export function DashboardView() {
-  const { status, transactions, goals } = useFinanceData();
+  const { status, transactions, goals, mode } = useFinanceData();
   const [period, setPeriod] = useState<Period>("this-month");
 
   if (status !== "ready") return <DataStatus />;
@@ -57,12 +57,15 @@ export function DashboardView() {
 
       {isFirstVisit && (
         <Card>
-          <EmptyState
+            <EmptyState
             icon={Sparkles}
             title="Mulai catat uangmu"
-            description="Belum ada data. Catat uang saku pertamamu, lalu buat target tabungan. Semua data disimpan di browser ini saja."
-            action={<QuickActions />}
-          />
+            description={
+                mode === "account"
+                ? "Belum ada data. Catat uang saku pertamamu, lalu buat target tabungan. Datamu tersimpan aman di akunmu."
+                : "Belum ada data. Catat uang saku pertamamu, lalu buat target tabungan. Karena kamu masuk sebagai tamu, data disimpan di browser ini saja."
+            }
+            />
         </Card>
       )}
 

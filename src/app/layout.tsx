@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Plus_Jakarta_Sans } from "next/font/google";
-import { AppNavigation } from "@/components/layout/AppNavigation";
-import { StorageNotice } from "@/components/layout/StorageNotice";
+import { AppShell } from "@/components/layout/AppShell";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -30,15 +29,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         >
           Lewati ke konten
         </a>
-        <div className="min-h-dvh md:flex">
-          <AppNavigation />
-          <main id="konten" className="flex-1 px-4 pb-28 pt-6 md:px-8 md:pb-12 md:pt-8">
-            <div className="mx-auto max-w-6xl">
-              <StorageNotice />
-              {children}
-            </div>
-          </main>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
