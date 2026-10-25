@@ -70,3 +70,13 @@ export function readList<T>(key: string, isItem: (value: unknown) => value is T)
   writeList(key, items);
   return { items, status: "recovered" };
 }
+
+export function removeKey(key: string): void {
+  const storage = getStorage();
+  if (!storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Abaikan: tidak ada yang bisa dilakukan bila browser menolak.
+  }
+}

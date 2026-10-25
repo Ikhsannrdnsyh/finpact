@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { buttonClasses } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { DataStatus } from "@/components/layout/DataStatus";
 import {
   buildChartSeries,
   calculateSummary,
@@ -42,7 +42,7 @@ export function DashboardView() {
   const { status, transactions, goals } = useFinanceData();
   const [period, setPeriod] = useState<Period>("this-month");
 
-  if (status === "loading") return <LoadingState />;
+  if (status !== "ready") return <DataStatus />;
 
   const today = todayISO();
   const { balance } = calculateSummary(transactions);

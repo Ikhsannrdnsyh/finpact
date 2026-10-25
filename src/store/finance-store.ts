@@ -1,10 +1,8 @@
-import { getGoalContribution } from "@/features/savings/calculations";
-import { loadSavingsGoals, saveSavingsGoals } from "@/features/savings/storage";
-import { TITLE_MAX_LENGTH } from "@/features/transactions/constants";
-import { loadTransactions, saveTransactions } from "@/features/transactions/storage";
-import { createId } from "@/lib/id";
-import { MAX_AMOUNT } from "@/lib/money";
-import type { ReadStatus } from "@/lib/storage/local-storage";
+import { FinanceError, getErrorMessage } from "@/data/errors";
+import { createLocalRepository } from "@/data/local-repository";
+import { createSupabaseRepository } from "@/data/supabase-repository";
+import type { FinanceRepository, StorageNotice } from "@/data/types";
+import { createClient } from "@/lib/supabase/client";
 import type {
   ActionResult,
   AddFundsInput,
@@ -14,56 +12,50 @@ import type {
   TransactionInput,
 } from "@/types/finance";
 
+export type { StorageNotice } from "@/data/types";
+
 /**
- * Store kecil berbasis useSyncExternalStore.
- * Server & hydration selalu melihat status "loading"; data localStorage
- * dibaca saat pertama kali diakses di browser. Ganti fungsi load/save di
- * sini bila kelak memakai backend — komponen UI tidak perlu ditulis ulang.
+ * State bersama aplikasi (useSyncExternalStore).
+ * - Tamu: data di browser (localStorage).
+ * - Sudah masuk: data di Supabase, dipisah per akun oleh RLS.
+ * Server & hydration selalu melihat status "loading".
  */
-export type StorageNotice = "unavailable" | "recovered";
+export type DataMode = "guest" | "account";
+
+export interface PendingImport {
+  transactions: number;
+  goals: number;
+}
 
 export interface FinanceSnapshot {
-  status: "loading" | "ready";
+  status: "loading" | "ready" | "error";
+  mode: DataMode;
   transactions: readonly Transaction[];
   goals: readonly SavingsGoal[];
   notice: StorageNotice | null;
+  loadError: string | null;
+  pendingImport: PendingImport | null;
 }
 
-const LOADING_SNAPSHOT: FinanceSnapshot = {
+const INITIAL_SNAPSHOT: FinanceSnapshot = {
   status: "loading",
+  mode: "guest",
   transactions: [],
   goals: [],
   notice: null,
+  loadError: null,
+  pendingImport: null,
 };
 
-const SAVE_FAILED: ActionResult = {
-  ok: false,
-  message:
-    "Data gagal disimpan. Penyimpanan browser mungkin penuh, diblokir, atau sedang dalam mode privat.",
-};
+const localRepository = createLocalRepository();
 
-let snapshot: FinanceSnapshot = LOADING_SNAPSHOT;
-let initialized = false;
+let snapshot: FinanceSnapshot = INITIAL_SNAPSHOT;
+let repository: FinanceRepository = localRepository;
+let startPromise: Promise<void> | null = null;
+let loadVersion = 0;
+let currentUserId: string | null | undefined;
+let importDismissed = false;
 const listeners = new Set<() => void>();
-
-function resolveNotice(statuses: ReadStatus[]): StorageNotice | null {
-  if (statuses.includes("unavailable")) return "unavailable";
-  if (statuses.includes("recovered")) return "recovered";
-  return null;
-}
-
-function initialize(): void {
-  if (initialized || typeof window === "undefined") return;
-  initialized = true;
-  const transactions = loadTransactions();
-  const goals = loadSavingsGoals();
-  snapshot = {
-    status: "ready",
-    transactions: transactions.items,
-    goals: goals.items,
-    notice: resolveNotice([transactions.status, goals.status]),
-  };
-}
 
 function setSnapshot(patch: Partial<FinanceSnapshot>): void {
   snapshot = { ...snapshot, ...patch };
@@ -72,151 +64,162 @@ function setSnapshot(patch: Partial<FinanceSnapshot>): void {
 
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
+  void initializeFinanceStore();
   return () => {
     listeners.delete(listener);
   };
 }
 
 export function getSnapshot(): FinanceSnapshot {
-  initialize();
   return snapshot;
 }
 
 export function getServerSnapshot(): FinanceSnapshot {
-  return LOADING_SNAPSHOT;
+  return INITIAL_SNAPSHOT;
 }
 
-function notFound(label: string): ActionResult {
-  return { ok: false, message: `${label} tidak ditemukan. Mungkin sudah dihapus.` };
+async function detectPendingImport(): Promise<PendingImport | null> {
+  if (importDismissed) return null;
+  const local = await localRepository.load();
+  if (local.transactions.length === 0 && local.goals.length === 0) return null;
+  return { transactions: local.transactions.length, goals: local.goals.length };
 }
 
-function timestamp(): string {
-  return new Date().toISOString();
-}
-
-// ---------- Commit (persist lalu update state) ----------
-
-function commitTransactions(next: Transaction[]): ActionResult {
-  if (!saveTransactions(next)) return SAVE_FAILED;
-  setSnapshot({ transactions: next });
-  return { ok: true };
-}
-
-function commitGoals(next: SavingsGoal[]): ActionResult {
-  if (!saveSavingsGoals(next)) return SAVE_FAILED;
-  setSnapshot({ goals: next });
-  return { ok: true };
-}
-
-/** Menyimpan transaksi & target bersamaan; bila target gagal, transaksi dikembalikan. */
-function commitAll(nextTransactions: Transaction[], nextGoals: SavingsGoal[]): ActionResult {
-  const previousTransactions = snapshot.transactions;
-  if (!saveTransactions(nextTransactions)) return SAVE_FAILED;
-  if (!saveSavingsGoals(nextGoals)) {
-    saveTransactions(previousTransactions);
-    return SAVE_FAILED;
+async function loadFrom(next: FinanceRepository, mode: DataMode): Promise<void> {
+  const version = ++loadVersion;
+  repository = next;
+  if (snapshot.status !== "loading" || snapshot.mode !== mode) {
+    // Kosongkan data lama supaya data akun sebelumnya tidak sempat terlihat.
+    setSnapshot({ status: "loading", mode, transactions: [], goals: [], loadError: null, pendingImport: null });
   }
-  setSnapshot({ transactions: nextTransactions, goals: nextGoals });
-  return { ok: true };
-}
 
-function adjustGoalSaved(goalId: string, delta: number, now: string): SavingsGoal[] {
-  return snapshot.goals.map((goal) =>
-    goal.id === goalId
-      ? { ...goal, savedAmount: Math.min(MAX_AMOUNT, Math.max(0, goal.savedAmount + delta)), updatedAt: now }
-      : goal,
-  );
-}
-
-/** Simpan transaksi; bila transaksi terhubung ke target yang masih ada, sesuaikan progresnya. */
-function commitWithGoalDelta(
-  nextTransactions: Transaction[],
-  goalId: string | undefined,
-  delta: number,
-  now: string,
-): ActionResult {
-  if (!goalId || delta === 0 || !snapshot.goals.some((goal) => goal.id === goalId)) {
-    return commitTransactions(nextTransactions);
+  try {
+    const data = await next.load();
+    const pendingImport = mode === "account" ? await detectPendingImport() : null;
+    if (version !== loadVersion) return;
+    setSnapshot({
+      status: "ready",
+      mode,
+      transactions: data.transactions,
+      goals: data.goals,
+      notice: mode === "guest" ? data.notice : null,
+      loadError: null,
+      pendingImport,
+    });
+  } catch (error) {
+    if (version !== loadVersion) return;
+    setSnapshot({ status: "error", mode, loadError: getErrorMessage(error) });
   }
-  return commitAll(nextTransactions, adjustGoalSaved(goalId, delta, now));
+}
+
+/** Mulai sekali: pilih penyimpanan sesuai status login, lalu ikuti perubahan login/logout. */
+export function initializeFinanceStore(): Promise<void> {
+  if (startPromise) return startPromise;
+  if (typeof window === "undefined") return Promise.resolve();
+
+  const supabase = createClient();
+  if (!supabase) {
+    startPromise = loadFrom(localRepository, "guest");
+    return startPromise;
+  }
+
+  startPromise = new Promise<void>((resolve) => {
+    supabase.auth.onAuthStateChange((_event, session) => {
+      const userId = session?.user.id ?? null;
+      if (userId === currentUserId) return; // mis. token diperbarui: bukan ganti akun
+      currentUserId = userId;
+      // Jangan memanggil Supabase langsung di dalam callback ini (bisa macet); tunda sebentar.
+      setTimeout(() => {
+        const next = userId ? createSupabaseRepository(supabase) : localRepository;
+        void loadFrom(next, userId ? "account" : "guest").finally(resolve);
+      }, 0);
+    });
+  });
+  return startPromise;
+}
+
+export function reloadFinanceData(): Promise<void> {
+  return loadFrom(repository, snapshot.mode);
+}
+
+/** Jalankan perubahan, lalu muat ulang data dari sumbernya agar tampilan selalu sesuai. */
+async function mutate(operation: (repo: FinanceRepository) => Promise<void>): Promise<ActionResult> {
+  await initializeFinanceStore();
+  const repo = repository;
+  const version = loadVersion;
+
+  try {
+    await operation(repo);
+  } catch (error) {
+    return { ok: false, message: getErrorMessage(error) };
+  }
+
+  try {
+    const data = await repo.load();
+    if (version === loadVersion) setSnapshot({ transactions: data.transactions, goals: data.goals });
+  } catch {
+    if (version === loadVersion) {
+      setSnapshot({
+        status: "error",
+        loadError: "Perubahan sudah tersimpan, tapi data terbaru belum bisa dimuat. Coba muat ulang.",
+      });
+    }
+  }
+  return { ok: true };
 }
 
 // ---------- Transaksi ----------
 
-export function addTransaction(input: TransactionInput): ActionResult {
-  initialize();
-  const now = timestamp();
-  return commitTransactions([
-    { ...input, id: createId(), createdAt: now, updatedAt: now },
-    ...snapshot.transactions,
-  ]);
+export function addTransaction(input: TransactionInput): Promise<ActionResult> {
+  return mutate((repo) => repo.addTransaction(input));
 }
 
-export function updateTransaction(id: string, input: TransactionInput): ActionResult {
-  initialize();
-  const existing = snapshot.transactions.find((item) => item.id === id);
-  if (!existing) return notFound("Transaksi");
-
-  const now = timestamp();
-  const updated: Transaction = { ...existing, ...input, updatedAt: now };
-  const next = snapshot.transactions.map((item) => (item.id === id ? updated : item));
-  const delta = getGoalContribution(updated) - getGoalContribution(existing);
-  return commitWithGoalDelta(next, existing.goalId, delta, now);
+export function updateTransaction(id: string, input: TransactionInput): Promise<ActionResult> {
+  return mutate((repo) => repo.updateTransaction(id, input));
 }
 
-export function deleteTransaction(id: string): ActionResult {
-  initialize();
-  const existing = snapshot.transactions.find((item) => item.id === id);
-  if (!existing) return notFound("Transaksi");
-
-  const next = snapshot.transactions.filter((item) => item.id !== id);
-  return commitWithGoalDelta(next, existing.goalId, -getGoalContribution(existing), timestamp());
+export function deleteTransaction(id: string): Promise<ActionResult> {
+  return mutate((repo) => repo.deleteTransaction(id));
 }
 
 // ---------- Target tabungan ----------
 
-export function addSavingsGoal(input: SavingsGoalInput): ActionResult {
-  initialize();
-  const now = timestamp();
-  return commitGoals([{ ...input, id: createId(), createdAt: now, updatedAt: now }, ...snapshot.goals]);
+export function addSavingsGoal(input: SavingsGoalInput): Promise<ActionResult> {
+  return mutate((repo) => repo.addSavingsGoal(input));
 }
 
-export function updateSavingsGoal(id: string, input: SavingsGoalInput): ActionResult {
-  initialize();
-  if (!snapshot.goals.some((goal) => goal.id === id)) return notFound("Target");
-  const now = timestamp();
-  return commitGoals(snapshot.goals.map((goal) => (goal.id === id ? { ...goal, ...input, updatedAt: now } : goal)));
+export function updateSavingsGoal(id: string, input: SavingsGoalInput): Promise<ActionResult> {
+  return mutate((repo) => repo.updateSavingsGoal(id, input));
 }
 
-/** Transaksi lama yang terhubung tetap ada di riwayat (uangnya memang sudah disisihkan). */
-export function deleteSavingsGoal(id: string): ActionResult {
-  initialize();
-  const next = snapshot.goals.filter((goal) => goal.id !== id);
-  if (next.length === snapshot.goals.length) return notFound("Target");
-  return commitGoals(next);
+export function deleteSavingsGoal(id: string): Promise<ActionResult> {
+  return mutate((repo) => repo.deleteSavingsGoal(id));
 }
 
-/** Menambah progres target sekaligus mencatat Uang Keluar kategori Tabungan. */
-export function addFundsToGoal(goalId: string, { amount, date }: AddFundsInput): ActionResult {
-  initialize();
+export function addFundsToGoal(goalId: string, input: AddFundsInput): Promise<ActionResult> {
   const goal = snapshot.goals.find((item) => item.id === goalId);
-  if (!goal) return notFound("Target");
-  if (goal.savedAmount + amount > MAX_AMOUNT) return { ok: false, message: "Nominal terlalu besar." };
+  if (!goal) return Promise.resolve({ ok: false, message: "Target tidak ditemukan. Mungkin sudah dihapus." });
+  return mutate((repo) => repo.addFundsToGoal(goal, input));
+}
 
-  const now = timestamp();
-  const transaction: Transaction = {
-    id: createId(),
-    type: "expense",
-    title: `Tabungan: ${goal.title}`.slice(0, TITLE_MAX_LENGTH),
-    amount,
-    category: "savings",
-    date,
-    note: "Dana disisihkan ke target tabungan.",
-    goalId,
-    createdAt: now,
-    updatedAt: now,
-  };
-  return commitAll([transaction, ...snapshot.transactions], adjustGoalSaved(goalId, amount, now));
+// ---------- Pindah data browser -> akun ----------
+
+export async function importLocalData(): Promise<ActionResult> {
+  const local = await localRepository.load();
+  const result = await mutate(async (repo) => {
+    if (!repo.importData) throw new FinanceError("Masuk ke akun dulu untuk memindahkan data.");
+    await repo.importData(local.transactions, local.goals);
+  });
+  if (result.ok) {
+    localRepository.clear(); // cegah data dipindahkan dua kali
+    setSnapshot({ pendingImport: null });
+  }
+  return result;
+}
+
+export function dismissImport(): void {
+  importDismissed = true;
+  setSnapshot({ pendingImport: null });
 }
 
 export function dismissStorageNotice(): void {

@@ -8,7 +8,7 @@ import { Button, buttonClasses } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TextInput } from "@/components/ui/FormField";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { DataStatus } from "@/components/layout/DataStatus";
 import { useFinanceData } from "@/hooks/use-finance-data";
 import { formatRupiah } from "@/lib/money";
 import type { Period, TypeFilter } from "@/types/finance";
@@ -23,7 +23,7 @@ export function HistoryView() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [period, setPeriod] = useState<Period>("all");
 
-  if (status === "loading") return <LoadingState />;
+  if (status !== "ready") return <DataStatus />;
 
   const filtered = sortByNewest(filterTransactions(transactions, { type: typeFilter, period, query }));
   const summary = calculateSummary(filtered);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState, type FormEvent } from "react";
-import { Save } from "lucide-react";
+import { LoaderCircle, Save } from "lucide-react";
 import { Alert, type Feedback } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Field, TextInput, fieldA11y } from "@/components/ui/FormField";
@@ -20,7 +20,7 @@ import {
 interface SavingsGoalFormProps {
   mode: "create" | "edit";
   initial?: SavingsGoal;
-  onSubmit: (input: SavingsGoalInput) => ActionResult;
+  onSubmit: (input: SavingsGoalInput) => Promise<ActionResult>;
   onCancel?: () => void;
 }
 
@@ -36,6 +36,8 @@ export function SavingsGoalForm({ mode, initial, onSubmit, onCancel }: SavingsGo
   );
   const [errors, setErrors] = useState<SavingsGoalFormErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
   const lockedRef = useRef(false);
 
   const fieldId = (name: SavingsGoalField) => `${formId}-${name}`;
@@ -54,9 +56,9 @@ export function SavingsGoalForm({ mode, initial, onSubmit, onCancel }: SavingsGo
     setFeedback(null);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (lockedRef.current) return;
+    if (savingRef.current || lockedRef.current) return;
 
     const validation = validateSavingsGoalForm(values);
     if (!validation.ok) {
@@ -65,14 +67,18 @@ export function SavingsGoalForm({ mode, initial, onSubmit, onCancel }: SavingsGo
       return;
     }
 
-    lockedRef.current = true;
-    const result = onSubmit(validation.value);
+    savingRef.current = true;
+    setIsSaving(true);
+    const result = await onSubmit(validation.value);
+    savingRef.current = false;
+    setIsSaving(false);
+
     if (!result.ok) {
-      lockedRef.current = false;
       setFeedback({ kind: "error", message: result.message });
       return;
     }
 
+    lockedRef.current = true;
     if (mode === "create") {
       setValues(createEmptySavingsGoalForm());
       setErrors({});
@@ -81,7 +87,7 @@ export function SavingsGoalForm({ mode, initial, onSubmit, onCancel }: SavingsGo
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+    <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-4">
       <Field id={fieldId("title")} label="Nama target" error={errors.title}>
         <TextInput
           id={fieldId("title")}
@@ -142,12 +148,12 @@ export function SavingsGoalForm({ mode, initial, onSubmit, onCancel }: SavingsGo
       {feedback && <Alert feedback={feedback} onDismiss={() => setFeedback(null)} />}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button variant="secondary" onClick={onCancel ?? resetForm}>
+        <Button variant="secondary" onClick={onCancel ?? resetForm} disabled={isSaving}>
           {onCancel ? "Batal" : "Kosongkan"}
         </Button>
-        <Button type="submit">
-          <Save className="size-4" />
-          {mode === "create" ? "Simpan Target" : "Simpan Perubahan"}
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+          {isSaving ? "Menyimpan..." : mode === "create" ? "Simpan Target" : "Simpan Perubahan"}
         </Button>
       </div>
     </form>

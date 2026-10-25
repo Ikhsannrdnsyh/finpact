@@ -19,11 +19,12 @@ interface TransactionListProps {
 export function TransactionList({ transactions, emptyState }: TransactionListProps) {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [deleting, setDeleting] = useState<Transaction | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
-  function handleUpdate(input: TransactionInput): ActionResult {
+  async function handleUpdate(input: TransactionInput): Promise<ActionResult> {
     if (!editing) return { ok: false, message: "Transaksi tidak ditemukan." };
-    const result = updateTransaction(editing.id, input);
+    const result = await updateTransaction(editing.id, input);
     if (result.ok) {
       setEditing(null);
       setFeedback({ kind: "success", message: "Perubahan transaksi disimpan." });
@@ -31,12 +32,15 @@ export function TransactionList({ transactions, emptyState }: TransactionListPro
     return result;
   }
 
-  function handleConfirmDelete() {
-    if (!deleting) return;
-    const result = deleteTransaction(deleting.id);
+  async function handleConfirmDelete() {
+    if (!deleting || isDeleting) return;
+    const target = deleting;
+    setIsDeleting(true);
+    const result = await deleteTransaction(target.id);
+    setIsDeleting(false);
     setFeedback(
       result.ok
-        ? { kind: "success", message: `Transaksi "${deleting.title}" sudah dihapus.` }
+        ? { kind: "success", message: `Transaksi "${target.title}" sudah dihapus.` }
         : { kind: "error", message: result.message },
     );
     setDeleting(null);
@@ -67,12 +71,11 @@ export function TransactionList({ transactions, emptyState }: TransactionListPro
 
       <Modal open={editing !== null} title="Edit Transaksi" onClose={() => setEditing(null)}>
         {editing?.goalId && (
-            <p className="mb-4 rounded-xl bg-primary-light p-3 text-sm text-primary-dark">
-             Transaksi ini terhubung ke target tabungan. Mengubah nominal akan ikut mengubah progres target.
-            </p>
+          <p className="mb-4 rounded-xl bg-primary-light p-3 text-sm text-primary-dark">
+            Transaksi ini terhubung ke target tabungan. Mengubah nominal akan ikut mengubah progres target.
+          </p>
         )}
         {editing && (
-            
           <TransactionForm
             key={editing.id}
             mode="edit"
@@ -88,13 +91,14 @@ export function TransactionList({ transactions, emptyState }: TransactionListPro
         open={deleting !== null}
         title="Hapus transaksi?"
         description={
-            deleting
-                ? `"${deleting.title}" (${formatRupiah(deleting.amount)}) akan dihapus dari browser ini dan saldo akan dihitung ulang.${
-                    deleting.goalId ? " Progres target tabungan yang terkait juga akan dikurangi." : ""
-                  }`
-                : ""
+          deleting
+            ? `"${deleting.title}" (${formatRupiah(deleting.amount)}) akan dihapus dan saldo akan dihitung ulang.${
+                deleting.goalId ? " Progres target tabungan yang terkait juga akan dikurangi." : ""
+              }`
+            : ""
         }
-        onConfirm={handleConfirmDelete}
+        pending={isDeleting}
+        onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setDeleting(null)}
       />
     </div>

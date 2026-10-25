@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState, type FormEvent } from "react";
-import { ArrowDownLeft, ArrowUpRight, Save } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, LoaderCircle, Save } from "lucide-react";
 import { Alert, type Feedback } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Field, SelectInput, TextArea, TextInput, fieldA11y } from "@/components/ui/FormField";
@@ -37,7 +37,7 @@ interface TransactionFormProps {
   mode: "create" | "edit";
   initial?: Transaction;
   submitLabel: string;
-  onSubmit: (input: TransactionInput) => ActionResult;
+  onSubmit: (input: TransactionInput) => Promise<ActionResult>;
   onCancel: () => void;
 }
 
@@ -48,8 +48,10 @@ export function TransactionForm({ mode, initial, submitLabel, onSubmit, onCancel
   );
   const [errors, setErrors] = useState<TransactionFormErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  // Mengunci form saat menyimpan & setelah berhasil sampai pengguna mengubah isian lagi,
-  // supaya klik "Simpan" berkali-kali tidak membuat transaksi ganda.
+  const [isSaving, setIsSaving] = useState(false);
+  // savingRef: sedang menyimpan. lockedRef: baru saja berhasil, kunci sampai isian diubah lagi.
+  // Keduanya mencegah transaksi ganda akibat klik "Simpan" berkali-kali.
+  const savingRef = useRef(false);
   const lockedRef = useRef(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -68,15 +70,14 @@ export function TransactionForm({ mode, initial, submitLabel, onSubmit, onCancel
     setValues((current) => ({
       ...current,
       type,
-      // Ganti kategori default otomatis, tapi jangan timpa pilihan pengguna.
       category: current.category === DEFAULT_CATEGORY[current.type] ? DEFAULT_CATEGORY[type] : current.category,
     }));
     setFeedback(null);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (lockedRef.current) return;
+    if (savingRef.current || lockedRef.current) return;
 
     const validation = validateTransactionForm(values);
     if (!validation.ok) {
@@ -85,14 +86,18 @@ export function TransactionForm({ mode, initial, submitLabel, onSubmit, onCancel
       return;
     }
 
-    lockedRef.current = true;
-    const result = onSubmit(validation.value);
+    savingRef.current = true;
+    setIsSaving(true);
+    const result = await onSubmit(validation.value);
+    savingRef.current = false;
+    setIsSaving(false);
+
     if (!result.ok) {
-      lockedRef.current = false;
       setFeedback({ kind: "error", message: result.message });
       return;
     }
 
+    lockedRef.current = true;
     if (mode === "create") {
       setValues((current) => createEmptyTransactionForm(current.date, current.type));
       setErrors({});
@@ -102,7 +107,7 @@ export function TransactionForm({ mode, initial, submitLabel, onSubmit, onCancel
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+    <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-4">
       <fieldset>
         <legend className="mb-1.5 text-sm font-semibold">Jenis transaksi</legend>
         <div className="grid grid-cols-2 gap-2">
@@ -217,12 +222,12 @@ export function TransactionForm({ mode, initial, submitLabel, onSubmit, onCancel
       {feedback && <Alert feedback={feedback} onDismiss={() => setFeedback(null)} />}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button variant="secondary" onClick={onCancel}>
+        <Button variant="secondary" onClick={onCancel} disabled={isSaving}>
           Batal
         </Button>
-        <Button type="submit">
-          <Save className="size-4" />
-          {submitLabel}
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+          {isSaving ? "Menyimpan..." : submitLabel}
         </Button>
       </div>
     </form>

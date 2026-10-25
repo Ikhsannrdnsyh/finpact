@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState, type FormEvent } from "react";
-import { CirclePlus } from "lucide-react";
+import { CirclePlus, LoaderCircle } from "lucide-react";
 import { Alert, type Feedback } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Field, TextInput, fieldA11y } from "@/components/ui/FormField";
@@ -19,7 +19,7 @@ import {
 interface AddFundsFormProps {
   goal: SavingsGoal;
   balance: number;
-  onSubmit: (input: AddFundsInput) => ActionResult;
+  onSubmit: (input: AddFundsInput) => Promise<ActionResult>;
   onCancel: () => void;
 }
 
@@ -38,22 +38,22 @@ export function AddFundsForm({ goal, balance, onSubmit, onCancel }: AddFundsForm
   const [values, setValues] = useState<AddFundsFormValues>(() => ({ amount: "", date: todayISO() }));
   const [errors, setErrors] = useState<AddFundsFormErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const lockedRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
 
   const progress = calculateGoalProgress(goal);
   const parsedAmount = parseRupiahInput(values.amount);
   const fieldId = (name: AddFundsField) => `${formId}-${name}`;
 
   function updateField(key: AddFundsField, value: string) {
-    lockedRef.current = false;
     setValues((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: undefined }));
     setFeedback(null);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (lockedRef.current) return;
+    if (savingRef.current) return;
 
     const validation = validateAddFundsForm(values);
     if (!validation.ok) {
@@ -62,16 +62,19 @@ export function AddFundsForm({ goal, balance, onSubmit, onCancel }: AddFundsForm
       return;
     }
 
-    lockedRef.current = true;
-    const result = onSubmit(validation.value);
+    savingRef.current = true;
+    setIsSaving(true);
+    const result = await onSubmit(validation.value);
+    // Bila berhasil, dialog ditutup oleh induknya; kunci tetap aktif agar tidak tersimpan dua kali.
     if (!result.ok) {
-      lockedRef.current = false;
+      savingRef.current = false;
+      setIsSaving(false);
       setFeedback({ kind: "error", message: result.message });
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+    <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-4">
       <p className="rounded-xl bg-primary-light p-3 text-sm text-primary-dark">
         Terkumpul <strong>{formatRupiah(goal.savedAmount)}</strong> dari {formatRupiah(goal.targetAmount)} (
         {progress.percent}%).
@@ -118,12 +121,12 @@ export function AddFundsForm({ goal, balance, onSubmit, onCancel }: AddFundsForm
       {feedback && <Alert feedback={feedback} onDismiss={() => setFeedback(null)} />}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button variant="secondary" onClick={onCancel}>
+        <Button variant="secondary" onClick={onCancel} disabled={isSaving}>
           Batal
         </Button>
-        <Button type="submit">
-          <CirclePlus className="size-4" />
-          Tambah Dana
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <CirclePlus className="size-4" />}
+          {isSaving ? "Menyimpan..." : "Tambah Dana"}
         </Button>
       </div>
     </form>

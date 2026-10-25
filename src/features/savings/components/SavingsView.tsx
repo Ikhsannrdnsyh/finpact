@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { PiggyBank } from "lucide-react";
+import { DataStatus } from "@/components/layout/DataStatus";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, type Feedback } from "@/components/ui/Alert";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { LoadingState } from "@/components/ui/LoadingState";
 import { Modal } from "@/components/ui/Modal";
 import { calculateSummary } from "@/features/transactions/calculations";
 import { useFinanceData } from "@/hooks/use-finance-data";
@@ -25,31 +25,33 @@ export function SavingsView() {
   const [funding, setFunding] = useState<SavingsGoal | null>(null);
   const [editing, setEditing] = useState<SavingsGoal | null>(null);
   const [deleting, setDeleting] = useState<SavingsGoal | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
-  if (status === "loading") return <LoadingState />;
+  if (status !== "ready") return <DataStatus />;
 
   const today = todayISO();
   const sortedGoals = sortGoals(goals);
   const summary = summarizeGoals(goals);
   const balance = calculateSummary(transactions).balance;
 
-  function handleAddFunds(input: AddFundsInput): ActionResult {
+  async function handleAddFunds(input: AddFundsInput): Promise<ActionResult> {
     if (!funding) return { ok: false, message: "Target tidak ditemukan." };
-    const result = addFundsToGoal(funding.id, input);
+    const target = funding;
+    const result = await addFundsToGoal(target.id, input);
     if (result.ok) {
       setFeedback({
         kind: "success",
-        message: `${formatRupiah(input.amount)} ditambahkan ke "${funding.title}" dan tercatat di Riwayat.`,
+        message: `${formatRupiah(input.amount)} ditambahkan ke "${target.title}" dan tercatat di Riwayat.`,
       });
       setFunding(null);
     }
     return result;
   }
 
-  function handleUpdate(input: SavingsGoalInput): ActionResult {
+  async function handleUpdate(input: SavingsGoalInput): Promise<ActionResult> {
     if (!editing) return { ok: false, message: "Target tidak ditemukan." };
-    const result = updateSavingsGoal(editing.id, input);
+    const result = await updateSavingsGoal(editing.id, input);
     if (result.ok) {
       setEditing(null);
       setFeedback({ kind: "success", message: "Perubahan target disimpan." });
@@ -57,12 +59,15 @@ export function SavingsView() {
     return result;
   }
 
-  function handleConfirmDelete() {
-    if (!deleting) return;
-    const result = deleteSavingsGoal(deleting.id);
+  async function handleConfirmDelete() {
+    if (!deleting || isDeleting) return;
+    const target = deleting;
+    setIsDeleting(true);
+    const result = await deleteSavingsGoal(target.id);
+    setIsDeleting(false);
     setFeedback(
       result.ok
-        ? { kind: "success", message: `Target "${deleting.title}" sudah dihapus.` }
+        ? { kind: "success", message: `Target "${target.title}" sudah dihapus.` }
         : { kind: "error", message: result.message },
     );
     setDeleting(null);
@@ -159,7 +164,8 @@ export function SavingsView() {
             ? `Target "${deleting.title}" dan progresnya akan dihapus. Transaksi tabungan yang sudah tercatat tetap ada di Riwayat.`
             : ""
         }
-        onConfirm={handleConfirmDelete}
+        pending={isDeleting}
+        onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setDeleting(null)}
       />
     </>

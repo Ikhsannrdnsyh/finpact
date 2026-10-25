@@ -7,7 +7,7 @@ import { ReceiptText } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { DataStatus } from "@/components/layout/DataStatus";
 import { useFinanceData } from "@/hooks/use-finance-data";
 import { addTransaction } from "@/store/finance-store";
 import type { TypeFilter } from "@/types/finance";
@@ -23,7 +23,7 @@ export function TransactionsView() {
   const { status, transactions } = useFinanceData();
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
-  if (status === "loading") return <LoadingState />;
+  if (status !== "ready") return <DataStatus />;
 
   const filtered = sortByNewest(filterTransactions(transactions, { type: typeFilter }));
   const latest = filtered.slice(0, LATEST_LIMIT);
