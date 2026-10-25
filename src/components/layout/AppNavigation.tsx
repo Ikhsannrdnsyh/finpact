@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { AccountMenu } from "./AccountMenu";
 import { BrandLogo } from "./BrandLogo";
 import { LocalDataNote } from "./LocalDataNote";
 import { NAV_ITEMS } from "./nav-items";
@@ -17,8 +18,9 @@ export function AppNavigation() {
   return (
     <>
       {/* Header ponsel */}
-      <header className="sticky top-0 z-30 border-b border-border bg-surface/90 px-4 py-3 backdrop-blur md:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-surface/90 px-4 py-3 backdrop-blur md:hidden">
         <BrandLogo />
+        <AccountMenu compact />
       </header>
 
       {/* Sidebar desktop */}
@@ -44,7 +46,10 @@ export function AppNavigation() {
             );
           })}
         </nav>
-        <LocalDataNote />
+        <div className="space-y-3">
+          <AccountMenu />
+          <LocalDataNote />
+        </div>
       </aside>
 
       {/* Navigasi bawah ponsel */}
