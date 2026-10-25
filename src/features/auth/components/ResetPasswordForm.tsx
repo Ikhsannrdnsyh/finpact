@@ -15,18 +15,29 @@ import { setGuestMode } from "../guest-mode";
 import { MIN_PASSWORD_LENGTH, getAuthErrorMessage } from "../messages";
 import { useAuth } from "../use-auth";
 
-interface ResetErrors {
-  password?: string;
-  confirm?: string;
+interface PasswordValues {
+  current: string;
+  password: string;
+  confirm: string;
+}
+
+type PasswordErrors = Partial<Record<keyof PasswordValues, string>>;
+
+function validate(values: PasswordValues): PasswordErrors {
+  const errors: PasswordErrors = {};
+  if (!values.current) errors.current = "Kata sandi saat ini wajib diisi.";
+  if (values.password.length < MIN_PASSWORD_LENGTH) errors.password = `Minimal ${MIN_PASSWORD_LENGTH} karakter.`;
+  else if (values.password === values.current) errors.password = "Kata sandi baru harus berbeda dari yang lama.";
+  if (values.confirm !== values.password) errors.confirm = "Konfirmasi kata sandi belum sama.";
+  return errors;
 }
 
 export function ResetPasswordForm() {
   const router = useRouter();
   const auth = useAuth();
   const formId = useId();
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [errors, setErrors] = useState<ResetErrors>({});
+  const [values, setValues] = useState<PasswordValues>({ current: "", password: "", confirm: "" });
+  const [errors, setErrors] = useState<PasswordErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -43,11 +54,11 @@ export function ResetPasswordForm() {
       <Card>
         <EmptyState
           icon={KeyRound}
-          title="Link sudah tidak berlaku"
-          description="Link reset hanya bisa dipakai sekali dan berlaku sebentar. Minta link baru, ya."
+          title="Masuk dulu"
+          description="Untuk mengganti kata sandi, masuk dengan kata sandi lama atau kata sandi sementara dari pengelola."
           action={
-            <Link href="/lupa-sandi" className={buttonClasses("primary")}>
-              Minta link baru
+            <Link href="/masuk" className={buttonClasses("primary")}>
+              Ke halaman masuk
             </Link>
           }
         />
@@ -55,30 +66,58 @@ export function ResetPasswordForm() {
     );
   }
 
-  const passwordId = `${formId}-password`;
-  const confirmId = `${formId}-confirm`;
+  const fieldId = (name: keyof PasswordValues) => `${formId}-${name}`;
+  const email = auth.user.email ?? null;
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function update(key: keyof PasswordValues, value: string) {
+    setValues((current) => ({ ...current, [key]: value }));
+    setErrors((current) => ({ ...current, [key]: undefined }));
+    setFeedback(null);
+  }
+
+    async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
 
-    const nextErrors: ResetErrors = {};
-    if (password.length < MIN_PASSWORD_LENGTH) nextErrors.password = `Minimal ${MIN_PASSWORD_LENGTH} karakter.`;
-    if (confirm !== password) nextErrors.confirm = "Konfirmasi kata sandi belum sama.";
+    const nextErrors = validate(values);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
     const supabase = createClient();
     if (!supabase) return;
+    if (!email) {
+      setFeedback({ kind: "error", message: "Akun ini tidak memiliki email. Hubungi pengelola FinPact." });
+      return;
+    }
 
     setPending(true);
     setFeedback(null);
     try {
-      const { error } = await supabase.auth.updateUser({ password });
+      // 1) Verifikasi kata sandi saat ini sekaligus buat sesi baru yang segar.
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password: values.current,
+      });
+      if (signInError) {
+        if (signInError.code === "invalid_credentials") {
+          setErrors({ current: "Kata sandi saat ini salah." });
+        } else {
+          setFeedback({ kind: "error", message: getAuthErrorMessage(signInError) });
+        }
+        return;
+      }
+
+      // 2) Ganti kata sandi.
+      const { error } = await supabase.auth.updateUser({
+        password: values.password,
+        current_password: values.current,
+      });
       if (error) {
+        console.error("[FinPact] Gagal mengganti kata sandi:", error);
         setFeedback({ kind: "error", message: getAuthErrorMessage(error) });
         return;
       }
+
       setGuestMode(false);
       router.replace("/");
     } catch {
@@ -91,27 +130,47 @@ export function ResetPasswordForm() {
   return (
     <Card>
       <p className="mb-4 text-sm text-muted">
-        Membuat kata sandi baru untuk <strong className="text-ink">{auth.user.email}</strong>.
+        Mengganti kata sandi untuk <strong className="text-ink">{auth.user.email}</strong>.
       </p>
       <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-4">
-        <Field id={passwordId} label="Kata sandi baru" error={errors.password} hint={`Minimal ${MIN_PASSWORD_LENGTH} karakter.`}>
+        <Field
+          id={fieldId("current")}
+          label="Kata sandi saat ini"
+          error={errors.current}
+          hint="Kalau baru di-reset pengelola, isi dengan kata sandi sementara."
+        >
           <TextInput
-            id={passwordId}
+            id={fieldId("current")}
             type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            {...fieldA11y(passwordId, errors.password, true)}
+            autoComplete="current-password"
+            value={values.current}
+            onChange={(event) => update("current", event.target.value)}
+            {...fieldA11y(fieldId("current"), errors.current, true)}
           />
         </Field>
-        <Field id={confirmId} label="Ulangi kata sandi baru" error={errors.confirm}>
+        <Field
+          id={fieldId("password")}
+          label="Kata sandi baru"
+          error={errors.password}
+          hint={`Minimal ${MIN_PASSWORD_LENGTH} karakter.`}
+        >
           <TextInput
-            id={confirmId}
+            id={fieldId("password")}
             type="password"
             autoComplete="new-password"
-            value={confirm}
-            onChange={(event) => setConfirm(event.target.value)}
-            {...fieldA11y(confirmId, errors.confirm)}
+            value={values.password}
+            onChange={(event) => update("password", event.target.value)}
+            {...fieldA11y(fieldId("password"), errors.password, true)}
+          />
+        </Field>
+        <Field id={fieldId("confirm")} label="Ulangi kata sandi baru" error={errors.confirm}>
+          <TextInput
+            id={fieldId("confirm")}
+            type="password"
+            autoComplete="new-password"
+            value={values.confirm}
+            onChange={(event) => update("confirm", event.target.value)}
+            {...fieldA11y(fieldId("confirm"), errors.confirm)}
           />
         </Field>
 
@@ -122,6 +181,12 @@ export function ResetPasswordForm() {
           {pending ? "Menyimpan..." : "Simpan Kata Sandi"}
         </Button>
       </form>
+
+      <p className="mt-5 text-center text-sm">
+        <Link href="/" className="font-semibold text-primary hover:underline">
+          Batal, kembali ke Home
+        </Link>
+      </p>
     </Card>
   );
 }

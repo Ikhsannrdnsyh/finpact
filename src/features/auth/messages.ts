@@ -9,8 +9,13 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   same_password: "Kata sandi baru harus berbeda dari yang lama.",
   over_email_send_rate_limit: "Terlalu banyak percobaan. Tunggu beberapa menit lalu coba lagi.",
   over_request_rate_limit: "Terlalu banyak percobaan. Tunggu beberapa menit lalu coba lagi.",
+  current_password_mismatch: "Kata sandi saat ini salah.",
+  current_password_required: "Isi kata sandi saat ini terlebih dahulu.",
 };
 
 export function getAuthErrorMessage(error: { code?: string } | null): string {
-  return (error?.code && AUTH_ERROR_MESSAGES[error.code]) || "Terjadi kesalahan. Coba lagi sebentar lagi.";
+  if (error?.code && AUTH_ERROR_MESSAGES[error.code]) return AUTH_ERROR_MESSAGES[error.code];
+  return error?.code
+    ? `Terjadi kesalahan (kode: ${error.code}). Coba lagi sebentar lagi.`
+    : "Terjadi kesalahan. Coba lagi sebentar lagi.";
 }
